@@ -15,6 +15,7 @@ import (
 
 type Room struct {
 	receivers []chan []byte
+	sync.RWMutex
 }
 
 func NewRoom() *Room {
@@ -22,28 +23,36 @@ func NewRoom() *Room {
 }
 
 func (r *Room) Join(newChan chan []byte) {
+	r.Lock()
 	r.receivers = append(r.receivers, newChan)
+	r.Unlock()
 }
 
 func (r *Room) Leave(channel chan []byte) {
+	r.Lock()
 	for i, receiver := range r.receivers {
 		if receiver == channel {
 			r.receivers = append(r.receivers[:i], r.receivers[i+1:]...)
 			break
 		}
 	}
+	r.Unlock()
 }
 
 func (r *Room) Broadcast(message []byte) {
+	r.RLock()
 	for _, receiver := range r.receivers {
 		receiver <- message
 	}
+	r.RUnlock()
 }
 
 func (r *Room) CloseReceivers() {
+	r.RLock()
 	for _, receiver := range r.receivers {
 		close(receiver)
 	}
+	r.RUnlock()
 }
 
 type Server struct {
@@ -67,23 +76,30 @@ func main() {
 			return
 		}
 		go func() {
-			code := code.GenerateRandom()
-			room := NewRoom()
+			var roomCode string
 			s.Lock()
-			s.codes[code] = room
+			for {
+				roomCode = code.GenerateRandom()
+				if _, exists := s.codes[roomCode]; !exists {
+					break
+				}
+			}
+			room := NewRoom()
+			s.codes[roomCode] = room
 			s.Unlock()
-			encoded, _ := json.Marshal(map[string]string{"code": code})
+			encoded, _ := json.Marshal(map[string]string{"code": roomCode})
 			wsutil.WriteServerText(conn, encoded)
 			defer conn.Close()
 			for {
 				msg, err := wsutil.ReadClientText(conn)
 				if err != nil {
+					s.Lock()
+					delete(s.codes, roomCode)
+					s.Unlock()
 					room.CloseReceivers()
 					break
 				}
-				s.RLock()
 				room.Broadcast(msg)
-				s.RUnlock()
 			}
 		}()
 	})
