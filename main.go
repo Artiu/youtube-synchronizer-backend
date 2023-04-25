@@ -8,9 +8,10 @@ import (
 	"yt-synchronizer/code"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
 type Room struct {
@@ -64,11 +65,16 @@ func NewServer() *Server {
 	return &Server{codes: make(map[string]*Room)}
 }
 
+func GetLogger(ip string, roomCode string) zerolog.Logger {
+	return log.With().Str("ip", ip).Str("room-code", roomCode).Logger()
+}
+
 func main() {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+
 	r := chi.NewRouter()
 	s := NewServer()
 
-	r.Use(middleware.Logger)
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
 		if err != nil {
@@ -87,12 +93,15 @@ func main() {
 			room := NewRoom()
 			s.codes[roomCode] = room
 			s.Unlock()
+			logger := GetLogger(r.RemoteAddr, roomCode)
+			logger.Info().Msg("Created room")
 			encoded, _ := json.Marshal(map[string]string{"code": roomCode})
 			wsutil.WriteServerText(conn, encoded)
 			defer conn.Close()
 			for {
 				msg, err := wsutil.ReadClientText(conn)
 				if err != nil {
+					logger.Info().Msg("Removing room")
 					s.Lock()
 					delete(s.codes, roomCode)
 					s.Unlock()
@@ -114,6 +123,8 @@ func main() {
 		}
 		sendChannel := make(chan []byte)
 		room.Join(sendChannel)
+		logger := GetLogger(r.RemoteAddr, code)
+		logger.Info().Msg("Joined room")
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -123,6 +134,7 @@ func main() {
 			case msg, more := <-sendChannel:
 				if !more {
 					room.Leave(sendChannel)
+					logger.Info().Msg("Left room")
 					break messageLoop
 				}
 				fmt.Fprintf(w, "data: %v\n\n", string(msg))
@@ -131,11 +143,13 @@ func main() {
 				}
 			case <-r.Context().Done():
 				room.Leave(sendChannel)
+				logger.Info().Msg("Left room")
 				break messageLoop
 			}
 		}
 
 	})
 
+	log.Info().Msg("Starting server on port 3000")
 	http.ListenAndServe("127.0.0.1:3000", r)
 }
