@@ -105,30 +105,24 @@ func main() {
 	})
 	r.Get("/room/{roomCode}", func(w http.ResponseWriter, r *http.Request) {
 		code := chi.URLParam(r, "roomCode")
-		s.Lock()
+		s.RLock()
 		room, ok := s.codes[code]
+		s.RUnlock()
 		if !ok {
-			s.Unlock()
 			w.WriteHeader(404)
 			return
 		}
 		sendChannel := make(chan []byte)
 		room.Join(sendChannel)
-		s.Unlock()
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		leaveRoom := func() {
-			s.Lock()
-			room.Leave(sendChannel)
-			s.Unlock()
-		}
 	messageLoop:
 		for {
 			select {
 			case msg, more := <-sendChannel:
 				if !more {
-					leaveRoom()
+					room.Leave(sendChannel)
 					break messageLoop
 				}
 				fmt.Fprintf(w, "data: %v\n\n", string(msg))
@@ -136,7 +130,7 @@ func main() {
 					f.Flush()
 				}
 			case <-r.Context().Done():
-				leaveRoom()
+				room.Leave(sendChannel)
 				break messageLoop
 			}
 		}
