@@ -4,12 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"yt-synchronizer/code"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -71,6 +73,11 @@ func GetLogger(ip string, roomCode string) zerolog.Logger {
 
 func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	godotenv.Load()
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3000"
+	}
 
 	r := chi.NewRouter()
 	s := NewServer()
@@ -150,6 +157,6 @@ func main() {
 
 	})
 
-	log.Info().Msg("Starting server on port 3000")
-	http.ListenAndServe("127.0.0.1:3000", r)
+	log.Info().Msgf("Starting server on port %v", port)
+	http.ListenAndServe(fmt.Sprintf("127.0.0.1:%v", port), r)
 }
