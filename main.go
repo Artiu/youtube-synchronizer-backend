@@ -6,9 +6,12 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"time"
 	"yt-synchronizer/code"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/httprate"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
 	"github.com/joho/godotenv"
@@ -81,6 +84,10 @@ func main() {
 
 	r := chi.NewRouter()
 	s := NewServer()
+
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.RealIP)
+	r.Use(httprate.LimitByIP(10, time.Minute))
 
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
