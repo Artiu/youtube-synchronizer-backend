@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/go-chi/httprate"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
@@ -86,6 +87,11 @@ func main() {
 	s := NewServer()
 
 	r.Use(middleware.Recoverer)
+	r.Use(cors.Handler(cors.Options{
+		AllowedOrigins:   []string{"chrome-extension://*"},
+		AllowedMethods:   []string{"GET"},
+		AllowCredentials: false,
+	}))
 	r.Use(middleware.RealIP)
 	r.Use(httprate.LimitByIP(10, time.Minute))
 
