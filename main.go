@@ -20,8 +20,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+type VideoState struct {
+	Path     *string  `json:"path"`
+	Time     *float64 `json:"time"`
+	Rate     *float32 `json:"rate"`
+	IsPaused *bool    `json:"isPaused"`
+}
+
 type Room struct {
-	receivers []chan []byte
+	receivers  []chan []byte
+	videoState VideoState
 	sync.RWMutex
 }
 
@@ -32,6 +40,11 @@ func NewRoom() *Room {
 func (r *Room) Join(newChan chan []byte) {
 	r.Lock()
 	r.receivers = append(r.receivers, newChan)
+	initialData, _ := json.Marshal(struct {
+		Type string `json:"type"`
+		VideoState
+	}{Type: "sync", VideoState: r.videoState})
+	newChan <- initialData
 	r.Unlock()
 }
 
@@ -60,6 +73,23 @@ func (r *Room) CloseReceivers() {
 		close(receiver)
 	}
 	r.RUnlock()
+}
+
+func (r *Room) UpdateVideoState(newVideoState VideoState) {
+	r.Lock()
+	if newVideoState.Path != nil {
+		r.videoState.Path = newVideoState.Path
+	}
+	if newVideoState.IsPaused != nil {
+		r.videoState.IsPaused = newVideoState.IsPaused
+	}
+	if newVideoState.Rate != nil {
+		r.videoState.Rate = newVideoState.Rate
+	}
+	if newVideoState.Time != nil {
+		r.videoState.Time = newVideoState.Time
+	}
+	r.Unlock()
 }
 
 type Server struct {
@@ -120,6 +150,9 @@ func main() {
 			defer conn.Close()
 			for {
 				msg, err := wsutil.ReadClientText(conn)
+				var newVideoState VideoState
+				json.Unmarshal(msg, &newVideoState)
+				room.UpdateVideoState(newVideoState)
 				if err != nil {
 					logger.Info().Msg("Removing room")
 					s.Lock()
@@ -141,7 +174,7 @@ func main() {
 			w.WriteHeader(404)
 			return
 		}
-		sendChannel := make(chan []byte)
+		sendChannel := make(chan []byte, 1)
 		room.Join(sendChannel)
 		logger := GetLogger(r.RemoteAddr, code)
 		logger.Info().Msg("Joined room")
