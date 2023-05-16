@@ -19,4 +19,24 @@ jobs:
               run: go get .
 
             - name: Build
-              run: go build -v ./...
+              run: go build -v -o main ./...
+
+            - name: Copy binary via scp
+              uses: appleboy/scp-action@master
+              env:
+                  HOST: ${{ secrets.HOST }}
+                  USERNAME: ${{ secrets.USERNAME }}
+                  KEY: ${{ secrets.SSHKEY }}
+              with:
+                  source: "main"
+                  target: "~/github/yt-synchronizer-backend"
+
+            - name: Deploy using ssh
+              uses: appleboy/ssh-action@master
+              with:
+                  host: ${{ secrets.HOST }}
+                  username: ${{ secrets.USERNAME }}
+                  key: ${{ secrets.SSHKEY }}
+                  script: |
+                      cd github/yt-synchronizer-backend
+                      ls
