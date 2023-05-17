@@ -38,5 +38,4 @@ jobs:
                   username: ${{ secrets.USERNAME }}
                   key: ${{ secrets.SSHKEY }}
                   script: |
-                      cd github/yt-synchronizer-backend
-                      ls
+                      sudo service yt-sychronizer-backend restart

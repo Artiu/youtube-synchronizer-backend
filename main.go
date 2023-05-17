@@ -124,6 +124,7 @@ func main() {
 	}))
 	r.Use(middleware.RealIP)
 	r.Use(httprate.LimitByIP(10, time.Minute))
+	r.Use(middleware.Heartbeat("/"))
 
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
