@@ -20,7 +20,7 @@ jobs:
               run: go get .
 
             - name: Build
-              run: go build -v -o main main.go
+              run: GOARCH=arm64 go build -v -o main main.go
 
             - name: Copy binary via scp
               uses: appleboy/scp-action@master
