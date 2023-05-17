@@ -20,7 +20,7 @@ jobs:
               run: go get .
 
             - name: Build
-              run: go build main.go -v -o main
+              run: go build -v -o dist/main main.go
 
             - name: Copy binary via scp
               uses: appleboy/scp-action@master
@@ -28,7 +28,7 @@ jobs:
                   host: ${{ secrets.HOST }}
                   username: ${{ secrets.USERNAME }}
                   key: ${{ secrets.SSHKEY }}
-                  source: "./main"
+                  source: "dist"
                   target: "~/github/yt-synchronizer-backend"
 
             - name: Deploy using ssh
