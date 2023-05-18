@@ -129,7 +129,7 @@ func main() {
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
 		if err != nil {
-			log.Error().Err(err)
+			log.Error().Str("msg", "Error while upgrading HTTP").Err(err).Msg("")
 			return
 		}
 		go func() {
