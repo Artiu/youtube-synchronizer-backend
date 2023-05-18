@@ -129,7 +129,7 @@ func main() {
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
 		if err != nil {
-			w.WriteHeader(500)
+			log.Error().Err(err)
 			return
 		}
 		go func() {
@@ -147,8 +147,15 @@ func main() {
 			logger := GetLogger(r.RemoteAddr, roomCode)
 			logger.Info().Msg("Created room")
 			encoded, _ := json.Marshal(map[string]string{"code": roomCode})
-			wsutil.WriteServerText(conn, encoded)
 			defer conn.Close()
+			err = wsutil.WriteServerText(conn, encoded)
+			if err != nil {
+				logger.Info().Msg("Removing room")
+				s.Lock()
+				delete(s.codes, roomCode)
+				s.Unlock()
+				return
+			}
 			for {
 				msg, err := wsutil.ReadClientText(conn)
 				var newVideoState VideoState
