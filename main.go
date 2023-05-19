@@ -101,6 +101,25 @@ func NewServer() *Server {
 	return &Server{codes: make(map[string]*Room)}
 }
 
+func (s *Server) RegisterCode(code string, room *Room) {
+	s.Lock()
+	s.codes[code] = room
+	s.Unlock()
+}
+
+func (s *Server) RemoveCode(code string) {
+	s.Lock()
+	delete(s.codes, code)
+	s.Unlock()
+}
+
+func (s *Server) GetRoom(code string) (*Room, bool) {
+	s.RLock()
+	room, exists := s.codes[code]
+	s.RUnlock()
+	return room, exists
+}
+
 func GetLogger(ip string, roomCode string) zerolog.Logger {
 	return log.With().Str("ip", ip).Str("room-code", roomCode).Logger()
 }
@@ -134,16 +153,14 @@ func main() {
 		}
 		go func() {
 			var roomCode string
-			s.Lock()
 			for {
 				roomCode = code.GenerateRandom()
-				if _, exists := s.codes[roomCode]; !exists {
+				if _, exists := s.GetRoom(roomCode); !exists {
 					break
 				}
 			}
 			room := NewRoom()
-			s.codes[roomCode] = room
-			s.Unlock()
+			s.RegisterCode(roomCode, room)
 			logger := GetLogger(r.RemoteAddr, roomCode)
 			logger.Info().Msg("Created room")
 			encoded, _ := json.Marshal(map[string]string{"code": roomCode})
@@ -151,9 +168,7 @@ func main() {
 			err = wsutil.WriteServerText(conn, encoded)
 			if err != nil {
 				logger.Info().Msg("Removing room")
-				s.Lock()
-				delete(s.codes, roomCode)
-				s.Unlock()
+				s.RemoveCode(roomCode)
 				return
 			}
 			for {
@@ -163,9 +178,7 @@ func main() {
 				room.UpdateVideoState(newVideoState)
 				if err != nil {
 					logger.Info().Msg("Removing room")
-					s.Lock()
-					delete(s.codes, roomCode)
-					s.Unlock()
+					s.RemoveCode(roomCode)
 					room.CloseReceivers()
 					break
 				}
@@ -175,10 +188,8 @@ func main() {
 	})
 	r.Get("/room/{roomCode}", func(w http.ResponseWriter, r *http.Request) {
 		code := chi.URLParam(r, "roomCode")
-		s.RLock()
-		room, ok := s.codes[code]
-		s.RUnlock()
-		if !ok {
+		room, exists := s.GetRoom(code)
+		if !exists {
 			w.WriteHeader(404)
 			return
 		}
