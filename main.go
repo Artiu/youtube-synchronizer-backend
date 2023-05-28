@@ -171,6 +171,20 @@ func main() {
 				s.RemoveCode(roomCode)
 				return
 			}
+
+			closed := make(chan bool)
+			ticker := time.NewTicker(time.Second * 10)
+			go func() {
+				for {
+					select {
+					case <-ticker.C:
+						conn.Write(ws.CompiledPing)
+					case <-closed:
+						return
+					}
+				}
+			}()
+
 			for {
 				msg, err := wsutil.ReadClientText(conn)
 				var newVideoState VideoState
@@ -178,6 +192,8 @@ func main() {
 				room.UpdateVideoState(newVideoState)
 				if err != nil {
 					logger.Info().Msg("Removing room")
+					ticker.Stop()
+					closed <- true
 					s.RemoveCode(roomCode)
 					room.CloseReceivers()
 					break
