@@ -178,7 +178,8 @@ func main() {
 				for {
 					select {
 					case <-ticker.C:
-						conn.Write(ws.CompiledPing)
+						encoded, _ = json.Marshal(map[string]string{"type": "ping"})
+						wsutil.WriteServerText(conn, encoded)
 					case <-closed:
 						return
 					}
