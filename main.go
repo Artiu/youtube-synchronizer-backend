@@ -232,7 +232,7 @@ func main() {
 				}
 			case <-r.Context().Done():
 				room.Leave(sendChannel)
-				logger.Info().Msg("Left room")
+				logger.Info().Err(r.Context().Err()).Msg("Left room")
 				break messageLoop
 			}
 		}
