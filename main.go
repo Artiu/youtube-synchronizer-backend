@@ -191,7 +191,7 @@ func main() {
 				json.Unmarshal(msg, &newVideoState)
 				room.UpdateVideoState(newVideoState)
 				if err != nil {
-					logger.Info().Msg("Removing room")
+					logger.Info().Err(err).Msg("Removing room")
 					ticker.Stop()
 					closed <- true
 					s.RemoveCode(roomCode)
