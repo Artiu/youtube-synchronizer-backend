@@ -217,11 +217,18 @@ func main() {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
+		pingTimer := time.NewTicker(time.Second * 15)
 	messageLoop:
 		for {
 			select {
+			case <-pingTimer.C:
+				fmt.Fprint(w, ":\n\n")
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
 			case msg, more := <-sendChannel:
 				if !more {
+					pingTimer.Stop()
 					room.Leave(sendChannel)
 					logger.Info().Msg("Left room")
 					break messageLoop
@@ -231,6 +238,7 @@ func main() {
 					f.Flush()
 				}
 			case <-r.Context().Done():
+				pingTimer.Stop()
 				room.Leave(sendChannel)
 				logger.Info().Err(r.Context().Err()).Msg("Left room")
 				break messageLoop
