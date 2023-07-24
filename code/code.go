@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-var letters = strings.Split("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", "")
+var letters = strings.Split("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz", "")
 
 const codeLength = 6
 
