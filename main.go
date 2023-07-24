@@ -40,7 +40,7 @@ type Room struct {
 }
 
 func NewRoom() *Room {
-	return &Room{receivers: make([]chan []byte, 0), reconnected: make(chan bool, 1)}
+	return &Room{receivers: make([]chan []byte, 0), reconnected: nil}
 }
 
 func (r *Room) Join(newChan chan []byte) {
@@ -182,6 +182,17 @@ func main() {
 		}
 		if roomCode != "" {
 			room, _ = s.GetRoom(roomCode)
+			if room != nil {
+				room.RLock()
+				if room.reconnected == nil {
+					room.RUnlock()
+					room = nil
+				} else {
+					room.reconnected <- true
+					room.RUnlock()
+					log.Info().Str("room-code", roomCode).Msg("Reconnected")
+				}
+			}
 		}
 		if room == nil {
 			for {
@@ -193,9 +204,6 @@ func main() {
 			log.Info().Str("room-code", roomCode).Msg("Created room")
 			room = NewRoom()
 			s.RegisterCode(roomCode, room)
-		} else {
-			log.Info().Str("room-code", roomCode).Msg("Reconnected")
-			room.reconnected <- true
 		}
 
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
@@ -248,9 +256,15 @@ func main() {
 					ticker.Stop()
 					closed <- true
 					reconnectionTimer := time.NewTimer(reconnectionTime)
+					room.Lock()
+					room.reconnected = make(chan bool)
+					room.Unlock()
 					select {
 					case <-room.reconnected:
 						reconnectionTimer.Stop()
+						room.Lock()
+						room.reconnected = nil
+						room.Unlock()
 					case <-reconnectionTimer.C:
 						s.RemoveCode(roomCode)
 						room.CloseReceivers()
