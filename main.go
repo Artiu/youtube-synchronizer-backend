@@ -137,12 +137,12 @@ func main() {
 
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"chrome-extension://*"},
+		AllowedOrigins:   []string{"chrome-extension://*", "https://www.youtube.com"},
 		AllowedMethods:   []string{"GET"},
 		AllowCredentials: false,
 	}))
 	r.Use(middleware.RealIP)
-	r.Use(httprate.LimitByIP(10, time.Minute))
+	r.Use(httprate.Limit(30, time.Minute, httprate.WithKeyFuncs(httprate.KeyByIP, httprate.KeyByEndpoint)))
 	r.Use(middleware.Heartbeat("/"))
 
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +163,7 @@ func main() {
 			s.RegisterCode(roomCode, room)
 			logger := GetLogger(r.RemoteAddr, roomCode)
 			logger.Info().Msg("Created room")
-			encoded, _ := json.Marshal(map[string]string{"code": roomCode})
+			encoded, _ := json.Marshal(map[string]string{"type": "code", "code": roomCode})
 			defer conn.Close()
 			err = wsutil.WriteServerText(conn, encoded)
 			if err != nil {
@@ -203,11 +203,26 @@ func main() {
 			}
 		}()
 	})
+	r.Get("/room/{roomCode}/path", func(w http.ResponseWriter, r *http.Request) {
+		code := chi.URLParam(r, "roomCode")
+		room, exists := s.GetRoom(code)
+		if !exists {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		path := ""
+		room.RLock()
+		if room.videoState.Path != nil {
+			path = *room.videoState.Path
+		}
+		room.RUnlock()
+		w.Write([]byte(path))
+	})
 	r.Get("/room/{roomCode}", func(w http.ResponseWriter, r *http.Request) {
 		code := chi.URLParam(r, "roomCode")
 		room, exists := s.GetRoom(code)
 		if !exists {
-			w.WriteHeader(404)
+			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		sendChannel := make(chan []byte, 1)
@@ -217,6 +232,7 @@ func main() {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
+		w.WriteHeader(http.StatusOK)
 		pingTimer := time.NewTicker(time.Second * 15)
 	messageLoop:
 		for {
