@@ -15,10 +15,15 @@ import (
 	"github.com/go-chi/httprate"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
+
+var jwtSecret string
+
+const reconnectionTime = time.Minute * 2
 
 type VideoState struct {
 	Path     *string  `json:"path"`
@@ -28,13 +33,14 @@ type VideoState struct {
 }
 
 type Room struct {
-	receivers  []chan []byte
-	videoState VideoState
+	receivers   []chan []byte
+	reconnected chan bool
+	videoState  VideoState
 	sync.RWMutex
 }
 
 func NewRoom() *Room {
-	return &Room{receivers: make([]chan []byte, 0)}
+	return &Room{receivers: make([]chan []byte, 0), reconnected: nil}
 }
 
 func (r *Room) Join(newChan chan []byte) {
@@ -124,12 +130,34 @@ func GetLogger(ip string, roomCode string) zerolog.Logger {
 	return log.With().Str("ip", ip).Str("room-code", roomCode).Logger()
 }
 
+func GenerateReconnectionJWT(roomCode string) (string, error) {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"roomCode": roomCode, "exp": jwt.NewNumericDate(time.Now().Add(reconnectionTime))})
+	return token.SignedString([]byte(jwtSecret))
+}
+
+func GetRoomCodeFromReconnectionJWT(tokenString string) string {
+	token, _ := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+		}
+		return []byte(jwtSecret), nil
+	})
+	if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
+		return claims["roomCode"].(string)
+	}
+	return ""
+}
+
 func main() {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	godotenv.Load()
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "3000"
+	}
+	jwtSecret = os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		panic("JWT_SECRET is not provided!")
 	}
 
 	r := chi.NewRouter()
@@ -146,21 +174,44 @@ func main() {
 	r.Use(middleware.Heartbeat("/"))
 
 	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
-		conn, _, _, err := ws.UpgradeHTTP(r, w)
-		if err != nil {
-			log.Error().Str("msg", "Error while upgrading HTTP").Err(err).Msg("")
-			return
+		var roomCode string
+		var room *Room
+		reconnectionKey := r.URL.Query().Get("reconnectKey")
+		if reconnectionKey != "" {
+			roomCode = GetRoomCodeFromReconnectionJWT(reconnectionKey)
 		}
-		go func() {
-			var roomCode string
+		if roomCode != "" {
+			room, _ = s.GetRoom(roomCode)
+			if room != nil {
+				room.RLock()
+				if room.reconnected == nil {
+					room.RUnlock()
+					room = nil
+				} else {
+					room.reconnected <- true
+					room.RUnlock()
+					log.Info().Str("room-code", roomCode).Msg("Reconnected")
+				}
+			}
+		}
+		if room == nil {
 			for {
 				roomCode = code.GenerateRandom()
 				if _, exists := s.GetRoom(roomCode); !exists {
 					break
 				}
 			}
-			room := NewRoom()
+			log.Info().Str("room-code", roomCode).Msg("Created room")
+			room = NewRoom()
 			s.RegisterCode(roomCode, room)
+		}
+
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			log.Error().Str("msg", "Error while upgrading HTTP").Err(err).Msg("")
+			return
+		}
+		go func() {
 			logger := GetLogger(r.RemoteAddr, roomCode)
 			logger.Info().Msg("Created room")
 			encoded, _ := json.Marshal(map[string]string{"type": "code", "code": roomCode})
@@ -173,13 +224,23 @@ func main() {
 			}
 
 			closed := make(chan bool)
-			ticker := time.NewTicker(time.Second * 10)
+			ticker := time.NewTicker(time.Minute)
+
 			go func() {
+				sendReconnectionKey := func() {
+					token, err := GenerateReconnectionJWT(roomCode)
+					if err != nil {
+						logger.Err(err).Send()
+						return
+					}
+					encoded, _ = json.Marshal(map[string]string{"type": "reconnectKey", "key": token})
+					wsutil.WriteServerText(conn, encoded)
+				}
+				sendReconnectionKey()
 				for {
 					select {
 					case <-ticker.C:
-						encoded, _ = json.Marshal(map[string]string{"type": "ping"})
-						wsutil.WriteServerText(conn, encoded)
+						sendReconnectionKey()
 					case <-closed:
 						return
 					}
@@ -192,11 +253,24 @@ func main() {
 				json.Unmarshal(msg, &newVideoState)
 				room.UpdateVideoState(newVideoState)
 				if err != nil {
-					logger.Info().Err(err).Msg("Removing room")
+					logger.Info().Msg("Disconnected")
 					ticker.Stop()
 					closed <- true
-					s.RemoveCode(roomCode)
-					room.CloseReceivers()
+					reconnectionTimer := time.NewTimer(reconnectionTime)
+					room.Lock()
+					room.reconnected = make(chan bool)
+					room.Unlock()
+					select {
+					case <-room.reconnected:
+						reconnectionTimer.Stop()
+						room.Lock()
+						room.reconnected = nil
+						room.Unlock()
+					case <-reconnectionTimer.C:
+						s.RemoveCode(roomCode)
+						room.CloseReceivers()
+						logger.Info().Msg("Removing room")
+					}
 					break
 				}
 				room.Broadcast(msg)
