@@ -293,6 +293,14 @@ func main() {
 		w.Write([]byte(path))
 	})
 	r.Get("/room/{roomCode}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "HTTP Streaming not supported!", http.StatusBadRequest)
+			return
+		}
 		code := chi.URLParam(r, "roomCode")
 		room, exists := s.GetRoom(code)
 		if !exists {
@@ -303,30 +311,25 @@ func main() {
 		room.Join(sendChannel)
 		logger := GetLogger(r.RemoteAddr, code)
 		logger.Info().Msg("Joined room")
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-		w.WriteHeader(http.StatusOK)
 		pingTimer := time.NewTicker(time.Second * 15)
 	messageLoop:
 		for {
 			select {
 			case <-pingTimer.C:
 				fmt.Fprint(w, ":\n\n")
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
+				flusher.Flush()
 			case msg, more := <-sendChannel:
 				if !more {
 					pingTimer.Stop()
 					room.Leave(sendChannel)
+					msg, _ = json.Marshal(map[string]string{"type": "close"})
+					fmt.Fprintf(w, "data: %v\n\n", string(msg))
+					flusher.Flush()
 					logger.Info().Msg("Left room")
 					break messageLoop
 				}
 				fmt.Fprintf(w, "data: %v\n\n", string(msg))
-				if f, ok := w.(http.Flusher); ok {
-					f.Flush()
-				}
+				flusher.Flush()
 			case <-r.Context().Done():
 				pingTimer.Stop()
 				room.Leave(sendChannel)
