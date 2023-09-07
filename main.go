@@ -199,6 +199,9 @@ func main() {
 					room.RUnlock()
 					log.Info().Str("room-code", roomCode).Msg("Reconnected")
 				}
+			} else {
+				room = NewRoom()
+				s.RegisterCode(roomCode, room)
 			}
 		}
 		if room == nil {
