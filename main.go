@@ -25,11 +25,18 @@ var jwtSecret string
 
 const reconnectionTime = time.Minute * 2
 
-type VideoState struct {
+type VideoStateMessage struct {
 	Path     *string  `json:"path"`
 	Time     *float64 `json:"time"`
 	Rate     *float32 `json:"rate"`
 	IsPaused *bool    `json:"isPaused"`
+}
+
+type VideoState struct {
+	Path     string  `json:"path"`
+	Time     float64 `json:"time"`
+	Rate     float32 `json:"rate"`
+	IsPaused bool    `json:"isPaused"`
 }
 
 type Room struct {
@@ -40,7 +47,7 @@ type Room struct {
 }
 
 func NewRoom() *Room {
-	return &Room{receivers: make([]chan []byte, 0), reconnected: nil}
+	return &Room{receivers: make([]chan []byte, 0), reconnected: nil, videoState: VideoState{Path: "", Time: 0, Rate: 1, IsPaused: false}}
 }
 
 func (r *Room) Join(newChan chan []byte) {
@@ -81,19 +88,19 @@ func (r *Room) CloseReceivers() {
 	r.RUnlock()
 }
 
-func (r *Room) UpdateVideoState(newVideoState VideoState) {
+func (r *Room) UpdateVideoState(newVideoState VideoStateMessage) {
 	r.Lock()
 	if newVideoState.Path != nil {
-		r.videoState.Path = newVideoState.Path
+		r.videoState.Path = *newVideoState.Path
 	}
 	if newVideoState.IsPaused != nil {
-		r.videoState.IsPaused = newVideoState.IsPaused
+		r.videoState.IsPaused = *newVideoState.IsPaused
 	}
 	if newVideoState.Rate != nil {
-		r.videoState.Rate = newVideoState.Rate
+		r.videoState.Rate = *newVideoState.Rate
 	}
 	if newVideoState.Time != nil {
-		r.videoState.Time = newVideoState.Time
+		r.videoState.Time = *newVideoState.Time
 	}
 	r.Unlock()
 }
@@ -213,7 +220,6 @@ func main() {
 		}
 		go func() {
 			logger := GetLogger(r.RemoteAddr, roomCode)
-			logger.Info().Msg("Created room")
 			encoded, _ := json.Marshal(map[string]string{"type": "code", "code": roomCode})
 			defer conn.Close()
 			err = wsutil.WriteServerText(conn, encoded)
@@ -249,9 +255,6 @@ func main() {
 
 			for {
 				msg, err := wsutil.ReadClientText(conn)
-				var newVideoState VideoState
-				json.Unmarshal(msg, &newVideoState)
-				room.UpdateVideoState(newVideoState)
 				if err != nil {
 					logger.Info().Msg("Disconnected")
 					ticker.Stop()
@@ -273,7 +276,24 @@ func main() {
 					}
 					break
 				}
-				room.Broadcast(msg)
+				var message struct {
+					Type string `json:"type"`
+				}
+				json.Unmarshal(msg, &message)
+				switch message.Type {
+				case "sync", "startPlaying", "pause", "pathChange", "rateChange":
+					var videoState VideoStateMessage
+					json.Unmarshal(msg, &videoState)
+					room.UpdateVideoState(videoState)
+					room.Broadcast(msg)
+				case "removeRoom":
+					ticker.Stop()
+					closed <- true
+					s.RemoveCode(roomCode)
+					room.CloseReceivers()
+					logger.Info().Msg("Removing room")
+					return
+				}
 			}
 		}()
 	})
@@ -284,11 +304,8 @@ func main() {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		path := ""
 		room.RLock()
-		if room.videoState.Path != nil {
-			path = *room.videoState.Path
-		}
+		path := room.videoState.Path
 		room.RUnlock()
 		w.Write([]byte(path))
 	})
