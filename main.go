@@ -331,16 +331,11 @@ func main() {
 		room.Join(sendChannel)
 		logger := GetLogger(r.RemoteAddr, code)
 		logger.Info().Msg("Joined room")
-		pingTimer := time.NewTicker(time.Second * 15)
 	messageLoop:
 		for {
 			select {
-			case <-pingTimer.C:
-				fmt.Fprint(w, ":\n\n")
-				flusher.Flush()
 			case msg, more := <-sendChannel:
 				if !more {
-					pingTimer.Stop()
 					room.Leave(sendChannel)
 					msg, _ = json.Marshal(map[string]string{"type": "close"})
 					fmt.Fprintf(w, "data: %v\n\n", string(msg))
@@ -351,9 +346,8 @@ func main() {
 				fmt.Fprintf(w, "data: %v\n\n", string(msg))
 				flusher.Flush()
 			case <-r.Context().Done():
-				pingTimer.Stop()
 				room.Leave(sendChannel)
-				logger.Info().Err(r.Context().Err()).Msg("Left room")
+				logger.Info().Msg("Left room")
 				break messageLoop
 			}
 		}
