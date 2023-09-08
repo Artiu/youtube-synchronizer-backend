@@ -25,18 +25,50 @@ var jwtSecret string
 
 const reconnectionTime = time.Minute * 2
 
-type VideoStateMessage struct {
-	Path     *string  `json:"path"`
-	Time     *float64 `json:"time"`
-	Rate     *float32 `json:"rate"`
-	IsPaused *bool    `json:"isPaused"`
+type VideoState struct {
+	Path           string  `json:"path"`
+	Time           float64 `json:"time"`
+	Rate           float32 `json:"rate"`
+	IsPaused       bool    `json:"isPaused"`
+	lastTimeUpdate time.Time
 }
 
-type VideoState struct {
-	Path     string  `json:"path"`
-	Time     float64 `json:"time"`
-	Rate     float32 `json:"rate"`
-	IsPaused bool    `json:"isPaused"`
+func (v *VideoState) updatePredictedTime() {
+	secondsDiff := float64(time.Now().UnixMilli()-v.lastTimeUpdate.UnixMilli()) / 1000
+	v.Time += secondsDiff * float64(v.Rate)
+}
+
+func (v VideoState) GetPredicted() VideoState {
+	if v.IsPaused {
+		return v
+	}
+	v.updatePredictedTime()
+	return v
+}
+
+func (v *VideoState) UpdatePath(newPath string) {
+	if v.Path != newPath {
+		v.Time = 0
+		v.lastTimeUpdate = time.Now()
+	}
+	v.Path = newPath
+}
+
+func (v *VideoState) UpdateRate(newRate float32) {
+	v.Rate = newRate
+}
+
+func (v *VideoState) UpdateIsPaused(isPaused bool) {
+	if isPaused && !v.IsPaused {
+		v.updatePredictedTime()
+	}
+	v.IsPaused = isPaused
+	v.lastTimeUpdate = time.Now()
+}
+
+func (v *VideoState) UpdateTime(newTime float64) {
+	v.Time = newTime
+	v.lastTimeUpdate = time.Now()
 }
 
 type Room struct {
@@ -56,7 +88,7 @@ func (r *Room) Join(newChan chan []byte) {
 	initialData, _ := json.Marshal(struct {
 		Type string `json:"type"`
 		VideoState
-	}{Type: "sync", VideoState: r.videoState})
+	}{Type: "sync", VideoState: r.videoState.GetPredicted()})
 	newChan <- initialData
 	r.Unlock()
 }
@@ -86,23 +118,6 @@ func (r *Room) CloseReceivers() {
 		close(receiver)
 	}
 	r.RUnlock()
-}
-
-func (r *Room) UpdateVideoState(newVideoState VideoStateMessage) {
-	r.Lock()
-	if newVideoState.Path != nil {
-		r.videoState.Path = *newVideoState.Path
-	}
-	if newVideoState.IsPaused != nil {
-		r.videoState.IsPaused = *newVideoState.IsPaused
-	}
-	if newVideoState.Rate != nil {
-		r.videoState.Rate = *newVideoState.Rate
-	}
-	if newVideoState.Time != nil {
-		r.videoState.Time = *newVideoState.Time
-	}
-	r.Unlock()
 }
 
 type Server struct {
@@ -284,11 +299,55 @@ func main() {
 				}
 				json.Unmarshal(msg, &message)
 				switch message.Type {
-				case "sync", "startPlaying", "pause", "pathChange", "rateChange":
-					var videoState VideoStateMessage
-					json.Unmarshal(msg, &videoState)
-					room.UpdateVideoState(videoState)
+				case "sync":
+					var parsedMessage struct {
+						Path     string  `json:"path"`
+						Time     float64 `json:"time"`
+						Rate     float32 `json:"rate"`
+						IsPaused bool    `json:"isPaused"`
+					}
+					json.Unmarshal(msg, &parsedMessage)
+					room.Lock()
+					room.videoState.UpdatePath(parsedMessage.Path)
+					room.videoState.UpdateIsPaused(parsedMessage.IsPaused)
+					room.videoState.UpdateRate(parsedMessage.Rate)
+					room.videoState.UpdateTime(parsedMessage.Time)
+					room.Unlock()
 					room.Broadcast(msg)
+				case "startPlaying":
+					var parsedMessage struct {
+						Time float64 `json:"time"`
+					}
+					json.Unmarshal(msg, &parsedMessage)
+					room.Lock()
+					room.videoState.UpdateIsPaused(false)
+					room.videoState.UpdateTime(parsedMessage.Time)
+					room.Unlock()
+				case "pause":
+					var parsedMessage struct {
+						Time float64 `json:"time"`
+					}
+					json.Unmarshal(msg, &parsedMessage)
+					room.Lock()
+					room.videoState.UpdateIsPaused(true)
+					room.videoState.UpdateTime(parsedMessage.Time)
+					room.Unlock()
+				case "pathChange":
+					var parsedMessage struct {
+						Path string `json:"path"`
+					}
+					json.Unmarshal(msg, &parsedMessage)
+					room.Lock()
+					room.videoState.UpdatePath(parsedMessage.Path)
+					room.Unlock()
+				case "rateChange":
+					var parsedMessage struct {
+						Rate float32 `json:"rate"`
+					}
+					json.Unmarshal(msg, &parsedMessage)
+					room.Lock()
+					room.videoState.UpdateRate(parsedMessage.Rate)
+					room.Unlock()
 				case "removeRoom":
 					ticker.Stop()
 					closed <- true
@@ -297,6 +356,7 @@ func main() {
 					logger.Info().Msg("Removing room")
 					return
 				}
+				room.Broadcast(msg)
 			}
 		}()
 	})
