@@ -82,14 +82,15 @@ func NewRoom() *Room {
 	return &Room{receivers: make([]chan []byte, 0), reconnected: nil, videoState: VideoState{Path: "", Time: 0, Rate: 1, IsPaused: false}}
 }
 
+func (r *Room) IsHostConnected() bool {
+	r.RLock()
+	defer r.RUnlock()
+	return r.reconnected == nil
+}
+
 func (r *Room) Join(newChan chan []byte) {
 	r.Lock()
 	r.receivers = append(r.receivers, newChan)
-	initialData, _ := json.Marshal(struct {
-		Type string `json:"type"`
-		VideoState
-	}{Type: "sync", VideoState: r.videoState.GetPredicted()})
-	newChan <- initialData
 	r.Unlock()
 }
 
@@ -281,12 +282,16 @@ func main() {
 					room.Lock()
 					room.reconnected = make(chan bool)
 					room.Unlock()
+					disconnectMsg, _ := json.Marshal(map[string]string{"type": "hostDisconnected"})
+					room.Broadcast(disconnectMsg)
 					select {
 					case <-room.reconnected:
 						reconnectionTimer.Stop()
 						room.Lock()
 						room.reconnected = nil
 						room.Unlock()
+						reconnectedMsg, _ := json.Marshal(map[string]string{"type": "hostReconnected"})
+						room.Broadcast(reconnectedMsg)
 					case <-reconnectionTimer.C:
 						s.RemoveCode(roomCode)
 						room.CloseReceivers()
@@ -313,7 +318,6 @@ func main() {
 					room.videoState.UpdateRate(parsedMessage.Rate)
 					room.videoState.UpdateTime(parsedMessage.Time)
 					room.Unlock()
-					room.Broadcast(msg)
 				case "startPlaying":
 					var parsedMessage struct {
 						Time float64 `json:"time"`
@@ -387,10 +391,22 @@ func main() {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		sendChannel := make(chan []byte, 1)
-		room.Join(sendChannel)
+		room.RLock()
+		initialData, _ := json.Marshal(struct {
+			Type string `json:"type"`
+			VideoState
+		}{Type: "sync", VideoState: room.videoState.GetPredicted()})
+		room.RUnlock()
+		fmt.Fprintf(w, "data: %v\n\n", string(initialData))
+		if !room.IsHostConnected() {
+			disconnectMsg, _ := json.Marshal(map[string]string{"type": "hostDisconnected"})
+			fmt.Fprintf(w, "data: %v\n\n", string(disconnectMsg))
+		}
+		flusher.Flush()
 		logger := GetLogger(r.RemoteAddr, code)
 		logger.Info().Msg("Joined room")
+		sendChannel := make(chan []byte)
+		room.Join(sendChannel)
 	messageLoop:
 		for {
 			select {
