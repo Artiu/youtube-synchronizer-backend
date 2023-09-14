@@ -44,7 +44,7 @@ func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
 		var room *Room
 		reconnectionKey := r.URL.Query().Get("reconnectKey")
 		if reconnectionKey != "" {
-			roomCode = reconnectJWT.GetRoomCodeFromReconnectionJWT(reconnectionKey)
+			roomCode = reconnectJWT.GetRoomCode(reconnectionKey)
 		}
 		if roomCode != "" {
 			room, _ = h.Server.GetRoom(roomCode)
@@ -96,7 +96,7 @@ func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
 
 			go func() {
 				sendReconnectionKey := func() {
-					token, err := reconnectJWT.GenerateReconnectionJWT(roomCode)
+					token, err := reconnectJWT.Generate(roomCode)
 					if err != nil {
 						logger.Err(err).Send()
 						return

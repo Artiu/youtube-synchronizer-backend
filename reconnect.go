@@ -17,12 +17,12 @@ func NewReconnectJWT(jwtSecret string) *ReconnectJWT {
 	return &ReconnectJWT{jwtSecret}
 }
 
-func (r ReconnectJWT) GenerateReconnectionJWT(roomCode string) (string, error) {
+func (r ReconnectJWT) Generate(roomCode string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"roomCode": roomCode, "exp": jwt.NewNumericDate(time.Now().Add(reconnectionTime))})
 	return token.SignedString([]byte(r.jwtSecret))
 }
 
-func (r ReconnectJWT) GetRoomCodeFromReconnectionJWT(tokenString string) string {
+func (r ReconnectJWT) GetRoomCode(tokenString string) string {
 	token, _ := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
