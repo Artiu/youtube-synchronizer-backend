@@ -1,6 +1,9 @@
 package main
 
-import "sync"
+import (
+	"slices"
+	"sync"
+)
 
 type Room struct {
 	receivers   []chan []byte
@@ -29,7 +32,7 @@ func (r *Room) Leave(channel chan []byte) {
 	r.Lock()
 	for i, receiver := range r.receivers {
 		if receiver == channel {
-			r.receivers = append(r.receivers[:i], r.receivers[i+1:]...)
+			r.receivers = slices.Delete(r.receivers, i, i+1)
 			break
 		}
 	}

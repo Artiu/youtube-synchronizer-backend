@@ -1,6 +1,6 @@
 module yt-synchronizer
 
-go 1.19
+go 1.21
 
 require (
 	github.com/go-chi/chi/v5 v5.0.8

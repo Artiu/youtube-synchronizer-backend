@@ -17,7 +17,7 @@ func MustLoadConfig() *Config {
 	if port == "" {
 		port = "3000"
 	}
-	jwtSecret = os.Getenv("JWT_SECRET")
+	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
 		panic("JWT_SECRET is not provided!")
 	}

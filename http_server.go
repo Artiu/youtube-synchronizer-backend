@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"time"
-	"yt-synchronizer/code"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -16,11 +15,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-type HTTPServer struct {
+type HTTPHandler struct {
 	Server *Server
 }
 
-func NewHTTPServer(s *Server) http.Handler {
+func NewHTTPServer(server *Server, reconnectJWT *ReconnectJWT) http.Handler {
+	httpHandler := HTTPHandler{server}
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
@@ -32,15 +32,22 @@ func NewHTTPServer(s *Server) http.Handler {
 	r.Use(httprate.Limit(30, time.Minute, httprate.WithKeyFuncs(httprate.KeyByIP, httprate.KeyByEndpoint)))
 	r.Use(middleware.Heartbeat("/"))
 
-	r.Get("/ws", func(w http.ResponseWriter, r *http.Request) {
+	r.Get("/ws", httpHandler.websocket(reconnectJWT))
+	r.Get("/room/{roomCode}/path", httpHandler.getRoomCurrentPath())
+	r.Get("/room/{roomCode}", httpHandler.getRoomEventStream())
+	return r
+}
+
+func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		var roomCode string
 		var room *Room
 		reconnectionKey := r.URL.Query().Get("reconnectKey")
 		if reconnectionKey != "" {
-			roomCode = GetRoomCodeFromReconnectionJWT(reconnectionKey)
+			roomCode = reconnectJWT.GetRoomCodeFromReconnectionJWT(reconnectionKey)
 		}
 		if roomCode != "" {
-			room, _ = s.GetRoom(roomCode)
+			room, _ = h.Server.GetRoom(roomCode)
 			if room != nil {
 				room.RLock()
 				if room.reconnected == nil {
@@ -53,19 +60,19 @@ func NewHTTPServer(s *Server) http.Handler {
 				}
 			} else {
 				room = NewRoom()
-				s.RegisterCode(roomCode, room)
+				h.Server.RegisterCode(roomCode, room)
 			}
 		}
 		if room == nil {
 			for {
-				roomCode = code.GenerateRandom()
-				if _, exists := s.GetRoom(roomCode); !exists {
+				roomCode = GenerateRandomCode()
+				if _, exists := h.Server.GetRoom(roomCode); !exists {
 					break
 				}
 			}
 			log.Info().Str("room-code", roomCode).Msg("Created room")
 			room = NewRoom()
-			s.RegisterCode(roomCode, room)
+			h.Server.RegisterCode(roomCode, room)
 		}
 
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
@@ -80,7 +87,7 @@ func NewHTTPServer(s *Server) http.Handler {
 			err = wsutil.WriteServerText(conn, encoded)
 			if err != nil {
 				logger.Info().Msg("Removing room")
-				s.RemoveCode(roomCode)
+				h.Server.RemoveCode(roomCode)
 				return
 			}
 
@@ -89,7 +96,7 @@ func NewHTTPServer(s *Server) http.Handler {
 
 			go func() {
 				sendReconnectionKey := func() {
-					token, err := GenerateReconnectionJWT(roomCode)
+					token, err := reconnectJWT.GenerateReconnectionJWT(roomCode)
 					if err != nil {
 						logger.Err(err).Send()
 						return
@@ -129,7 +136,7 @@ func NewHTTPServer(s *Server) http.Handler {
 						reconnectedMsg, _ := json.Marshal(map[string]string{"type": "hostReconnected"})
 						room.Broadcast(reconnectedMsg)
 					case <-reconnectionTimer.C:
-						s.RemoveCode(roomCode)
+						h.Server.RemoveCode(roomCode)
 						room.CloseReceivers()
 						logger.Info().Msg("Removing room")
 					}
@@ -191,7 +198,7 @@ func NewHTTPServer(s *Server) http.Handler {
 				case "removeRoom":
 					ticker.Stop()
 					closed <- true
-					s.RemoveCode(roomCode)
+					h.Server.RemoveCode(roomCode)
 					room.CloseReceivers()
 					logger.Info().Msg("Removing room")
 					return
@@ -199,10 +206,13 @@ func NewHTTPServer(s *Server) http.Handler {
 				room.Broadcast(msg)
 			}
 		}()
-	})
-	r.Get("/room/{roomCode}/path", func(w http.ResponseWriter, r *http.Request) {
+	}
+}
+
+func (h HTTPHandler) getRoomCurrentPath() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		code := chi.URLParam(r, "roomCode")
-		room, exists := s.GetRoom(code)
+		room, exists := h.Server.GetRoom(code)
 		if !exists {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -211,8 +221,11 @@ func NewHTTPServer(s *Server) http.Handler {
 		path := room.videoState.Path
 		room.RUnlock()
 		w.Write([]byte(path))
-	})
-	r.Get("/room/{roomCode}", func(w http.ResponseWriter, r *http.Request) {
+	}
+}
+
+func (h HTTPHandler) getRoomEventStream() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
@@ -222,7 +235,7 @@ func NewHTTPServer(s *Server) http.Handler {
 			return
 		}
 		code := chi.URLParam(r, "roomCode")
-		room, exists := s.GetRoom(code)
+		room, exists := h.Server.GetRoom(code)
 		if !exists {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -264,6 +277,5 @@ func NewHTTPServer(s *Server) http.Handler {
 			}
 		}
 
-	})
-	return r
+	}
 }
