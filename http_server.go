@@ -49,18 +49,16 @@ func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
 		if roomCode != "" {
 			room, _ = h.Server.GetRoom(roomCode)
 			if room != nil {
-				room.RLock()
-				if room.reconnected == nil {
-					room.RUnlock()
+				if room.IsHostConnected() {
 					room = nil
 				} else {
-					room.reconnected <- true
-					room.RUnlock()
+					room.SendHostReconnected()
 					log.Info().Str("room-code", roomCode).Msg("Reconnected")
 				}
 			} else {
 				room = NewRoom()
 				h.Server.RegisterCode(roomCode, room)
+				log.Info().Str("room-code", roomCode).Msg("Reconnected")
 			}
 		}
 		if room == nil {
@@ -122,17 +120,13 @@ func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
 					ticker.Stop()
 					closed <- true
 					reconnectionTimer := time.NewTimer(reconnectionTime)
-					room.Lock()
-					room.reconnected = make(chan bool)
-					room.Unlock()
+					room.UpdateReconnectChannel(make(chan bool))
 					disconnectMsg, _ := json.Marshal(map[string]string{"type": "hostDisconnected"})
 					room.Broadcast(disconnectMsg)
 					select {
 					case <-room.reconnected:
 						reconnectionTimer.Stop()
-						room.Lock()
-						room.reconnected = nil
-						room.Unlock()
+						room.UpdateReconnectChannel(nil)
 						reconnectedMsg, _ := json.Marshal(map[string]string{"type": "hostReconnected"})
 						room.Broadcast(reconnectedMsg)
 					case <-reconnectionTimer.C:
@@ -155,46 +149,46 @@ func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
 						IsPaused bool    `json:"isPaused"`
 					}
 					json.Unmarshal(msg, &parsedMessage)
-					room.Lock()
-					room.videoState.UpdatePath(parsedMessage.Path)
-					room.videoState.UpdateIsPaused(parsedMessage.IsPaused)
-					room.videoState.UpdateRate(parsedMessage.Rate)
-					room.videoState.UpdateTime(parsedMessage.Time)
-					room.Unlock()
+					room.UpdateVideoState(func(v *VideoState) {
+						v.UpdatePath(parsedMessage.Path)
+						v.UpdateIsPaused(parsedMessage.IsPaused)
+						v.UpdateRate(parsedMessage.Rate)
+						v.UpdateTime(parsedMessage.Time)
+					})
 				case "startPlaying":
 					var parsedMessage struct {
 						Time float64 `json:"time"`
 					}
 					json.Unmarshal(msg, &parsedMessage)
-					room.Lock()
-					room.videoState.UpdateIsPaused(false)
-					room.videoState.UpdateTime(parsedMessage.Time)
-					room.Unlock()
+					room.UpdateVideoState(func(v *VideoState) {
+						v.UpdateIsPaused(false)
+						v.UpdateTime(parsedMessage.Time)
+					})
 				case "pause":
 					var parsedMessage struct {
 						Time float64 `json:"time"`
 					}
 					json.Unmarshal(msg, &parsedMessage)
-					room.Lock()
-					room.videoState.UpdateIsPaused(true)
-					room.videoState.UpdateTime(parsedMessage.Time)
-					room.Unlock()
+					room.UpdateVideoState(func(v *VideoState) {
+						v.UpdateIsPaused(true)
+						v.UpdateTime(parsedMessage.Time)
+					})
 				case "pathChange":
 					var parsedMessage struct {
 						Path string `json:"path"`
 					}
 					json.Unmarshal(msg, &parsedMessage)
-					room.Lock()
-					room.videoState.UpdatePath(parsedMessage.Path)
-					room.Unlock()
+					room.UpdateVideoState(func(v *VideoState) {
+						room.videoState.UpdatePath(parsedMessage.Path)
+					})
 				case "rateChange":
 					var parsedMessage struct {
 						Rate float32 `json:"rate"`
 					}
 					json.Unmarshal(msg, &parsedMessage)
-					room.Lock()
-					room.videoState.UpdateRate(parsedMessage.Rate)
-					room.Unlock()
+					room.UpdateVideoState(func(v *VideoState) {
+						v.UpdateRate(parsedMessage.Rate)
+					})
 				case "removeRoom":
 					ticker.Stop()
 					closed <- true
@@ -217,9 +211,7 @@ func (h HTTPHandler) getRoomCurrentPath() http.HandlerFunc {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		room.RLock()
-		path := room.videoState.Path
-		room.RUnlock()
+		path := room.GetVideoPath()
 		w.Write([]byte(path))
 	}
 }
@@ -240,12 +232,11 @@ func (h HTTPHandler) getRoomEventStream() http.HandlerFunc {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		room.RLock()
+		videoState := room.GetPredictedVideoState()
 		initialData, _ := json.Marshal(struct {
 			Type string `json:"type"`
 			VideoState
-		}{Type: "sync", VideoState: room.videoState.GetPredicted()})
-		room.RUnlock()
+		}{Type: "sync", VideoState: videoState})
 		fmt.Fprintf(w, "data: %v\n\n", string(initialData))
 		if !room.IsHostConnected() {
 			disconnectMsg, _ := json.Marshal(map[string]string{"type": "hostDisconnected"})

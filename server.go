@@ -6,7 +6,7 @@ import (
 
 type Server struct {
 	codes map[string]*Room
-	sync.RWMutex
+	lock  sync.RWMutex
 }
 
 func NewServer() *Server {
@@ -14,20 +14,20 @@ func NewServer() *Server {
 }
 
 func (s *Server) RegisterCode(code string, room *Room) {
-	s.Lock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 	s.codes[code] = room
-	s.Unlock()
 }
 
 func (s *Server) RemoveCode(code string) {
-	s.Lock()
+	s.lock.Lock()
+	defer s.lock.Unlock()
 	delete(s.codes, code)
-	s.Unlock()
 }
 
 func (s *Server) GetRoom(code string) (*Room, bool) {
-	s.RLock()
+	s.lock.RLock()
+	defer s.lock.RUnlock()
 	room, exists := s.codes[code]
-	s.RUnlock()
 	return room, exists
 }

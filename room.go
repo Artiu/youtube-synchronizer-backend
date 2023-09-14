@@ -9,7 +9,7 @@ type Room struct {
 	receivers   []chan []byte
 	reconnected chan bool
 	videoState  VideoState
-	sync.RWMutex
+	lock        sync.RWMutex
 }
 
 func NewRoom() *Room {
@@ -17,40 +17,70 @@ func NewRoom() *Room {
 }
 
 func (r *Room) IsHostConnected() bool {
-	r.RLock()
-	defer r.RUnlock()
+	r.lock.RLock()
+	defer r.lock.RUnlock()
 	return r.reconnected == nil
 }
 
+func (r *Room) SendHostReconnected() {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+	r.reconnected <- true
+}
+
+func (r *Room) GetVideoPath() string {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+	return r.videoState.Path
+}
+
+func (r *Room) UpdateReconnectChannel(newReconnectChannel chan bool) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	r.reconnected = newReconnectChannel
+}
+
+func (r *Room) UpdateVideoState(updateFunc func(v *VideoState)) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	updateFunc(&r.videoState)
+}
+
+func (r *Room) GetPredictedVideoState() VideoState {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+	return r.videoState.GetPredicted()
+}
+
 func (r *Room) Join(newChan chan []byte) {
-	r.Lock()
+	r.lock.Lock()
+	defer r.lock.Unlock()
 	r.receivers = append(r.receivers, newChan)
-	r.Unlock()
 }
 
 func (r *Room) Leave(channel chan []byte) {
-	r.Lock()
+	r.lock.Lock()
+	defer r.lock.Unlock()
 	for i, receiver := range r.receivers {
 		if receiver == channel {
 			r.receivers = slices.Delete(r.receivers, i, i+1)
 			break
 		}
 	}
-	r.Unlock()
 }
 
 func (r *Room) Broadcast(message []byte) {
-	r.RLock()
+	r.lock.RLock()
+	defer r.lock.RUnlock()
 	for _, receiver := range r.receivers {
 		receiver <- message
 	}
-	r.RUnlock()
 }
 
 func (r *Room) CloseReceivers() {
-	r.RLock()
+	r.lock.RLock()
+	defer r.lock.RUnlock()
 	for _, receiver := range r.receivers {
 		close(receiver)
 	}
-	r.RUnlock()
 }
