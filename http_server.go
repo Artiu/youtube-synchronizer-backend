@@ -136,19 +136,17 @@ func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
 					}
 					break
 				}
-				var message struct {
+				message := UnmarshalJSON[struct {
 					Type string `json:"type"`
-				}
-				json.Unmarshal(msg, &message)
+				}](msg)
 				switch message.Type {
 				case "sync":
-					var parsedMessage struct {
+					parsedMessage := UnmarshalJSON[struct {
 						Path     string  `json:"path"`
 						Time     float64 `json:"time"`
 						Rate     float32 `json:"rate"`
 						IsPaused bool    `json:"isPaused"`
-					}
-					json.Unmarshal(msg, &parsedMessage)
+					}](msg)
 					room.UpdateVideoState(func(v *VideoState) {
 						v.UpdatePath(parsedMessage.Path)
 						v.UpdateIsPaused(parsedMessage.IsPaused)
@@ -156,36 +154,32 @@ func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
 						v.UpdateTime(parsedMessage.Time)
 					})
 				case "startPlaying":
-					var parsedMessage struct {
+					parsedMessage := UnmarshalJSON[struct {
 						Time float64 `json:"time"`
-					}
-					json.Unmarshal(msg, &parsedMessage)
+					}](msg)
 					room.UpdateVideoState(func(v *VideoState) {
 						v.UpdateIsPaused(false)
 						v.UpdateTime(parsedMessage.Time)
 					})
 				case "pause":
-					var parsedMessage struct {
+					parsedMessage := UnmarshalJSON[struct {
 						Time float64 `json:"time"`
-					}
-					json.Unmarshal(msg, &parsedMessage)
+					}](msg)
 					room.UpdateVideoState(func(v *VideoState) {
 						v.UpdateIsPaused(true)
 						v.UpdateTime(parsedMessage.Time)
 					})
 				case "pathChange":
-					var parsedMessage struct {
+					parsedMessage := UnmarshalJSON[struct {
 						Path string `json:"path"`
-					}
-					json.Unmarshal(msg, &parsedMessage)
+					}](msg)
 					room.UpdateVideoState(func(v *VideoState) {
 						room.videoState.UpdatePath(parsedMessage.Path)
 					})
 				case "rateChange":
-					var parsedMessage struct {
+					parsedMessage := UnmarshalJSON[struct {
 						Rate float32 `json:"rate"`
-					}
-					json.Unmarshal(msg, &parsedMessage)
+					}](msg)
 					room.UpdateVideoState(func(v *VideoState) {
 						v.UpdateRate(parsedMessage.Rate)
 					})
