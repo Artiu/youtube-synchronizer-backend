@@ -31,3 +31,16 @@ func (s *Server) GetRoom(code string) (*Room, bool) {
 	room, exists := s.codes[code]
 	return room, exists
 }
+
+func (s *Server) CreateRoom() (string, *Room) {
+	var code string
+	for {
+		code = GenerateRandomCode()
+		if _, exists := s.GetRoom(code); !exists {
+			break
+		}
+	}
+	room := NewRoom()
+	s.RegisterCode(code, room)
+	return code, room
+}

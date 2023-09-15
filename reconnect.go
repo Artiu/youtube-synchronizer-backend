@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -8,21 +9,23 @@ import (
 )
 
 const reconnectionTime = time.Minute * 2
+const reconnectionTokenSendFreq = time.Minute
 
-type ReconnectJWT struct {
+type Reconnect struct {
 	jwtSecret string
+	server    *Server
 }
 
-func NewReconnectJWT(jwtSecret string) *ReconnectJWT {
-	return &ReconnectJWT{jwtSecret}
+func NewReconnect(jwtSecret string, server *Server) *Reconnect {
+	return &Reconnect{jwtSecret, server}
 }
 
-func (r ReconnectJWT) Generate(roomCode string) (string, error) {
+func (r Reconnect) GenerateReconnectionToken(roomCode string) (string, error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"roomCode": roomCode, "exp": jwt.NewNumericDate(time.Now().Add(reconnectionTime))})
 	return token.SignedString([]byte(r.jwtSecret))
 }
 
-func (r ReconnectJWT) GetRoomCode(tokenString string) string {
+func (r Reconnect) getRoomCode(tokenString string) string {
 	token, _ := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
@@ -33,4 +36,25 @@ func (r ReconnectJWT) GetRoomCode(tokenString string) string {
 		return claims["roomCode"].(string)
 	}
 	return ""
+}
+
+func (r Reconnect) Try(reconnectionKey string) (string, *Room, error) {
+	if reconnectionKey == "" {
+		return "", nil, errors.New("empty reconnection key")
+	}
+	roomCode := r.getRoomCode(reconnectionKey)
+	if roomCode == "" {
+		return "", nil, errors.New("incorrect or expired JWT")
+	}
+	room, _ := r.server.GetRoom(roomCode)
+	if room == nil {
+		room = NewRoom()
+		r.server.RegisterCode(roomCode, room)
+		return roomCode, room, nil
+	}
+	if room.IsHostConnected() {
+		return "", nil, errors.New("host already connected")
+	}
+	room.SendHostReconnected()
+	return roomCode, room, nil
 }

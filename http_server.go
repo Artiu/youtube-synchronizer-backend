@@ -12,14 +12,24 @@ import (
 	"github.com/go-chi/httprate"
 	"github.com/gobwas/ws"
 	"github.com/gobwas/ws/wsutil"
-	"github.com/rs/zerolog/log"
 )
+
+func UnmarshalJSON[T any](data []byte) T {
+	var parsed T
+	json.Unmarshal(data, &parsed)
+	return parsed
+}
+
+func MustMarshalJSON(data any) []byte {
+	encoded, _ := json.Marshal(data)
+	return encoded
+}
 
 type HTTPHandler struct {
 	Server *Server
 }
 
-func NewHTTPServer(server *Server, reconnectJWT *ReconnectJWT) http.Handler {
+func NewHTTPServer(server *Server, reconnect *Reconnect) http.Handler {
 	httpHandler := HTTPHandler{server}
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
@@ -32,168 +42,141 @@ func NewHTTPServer(server *Server, reconnectJWT *ReconnectJWT) http.Handler {
 	r.Use(httprate.Limit(30, time.Minute, httprate.WithKeyFuncs(httprate.KeyByIP, httprate.KeyByEndpoint)))
 	r.Use(middleware.Heartbeat("/"))
 
-	r.Get("/ws", httpHandler.websocket(reconnectJWT))
+	r.Get("/ws", httpHandler.websocket(reconnect))
 	r.Get("/room/{roomCode}/path", httpHandler.getRoomCurrentPath())
 	r.Get("/room/{roomCode}", httpHandler.getRoomEventStream())
 	return r
 }
 
-func (h HTTPHandler) websocket(reconnectJWT *ReconnectJWT) http.HandlerFunc {
+func (h HTTPHandler) websocket(reconnect *Reconnect) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var roomCode string
-		var room *Room
 		reconnectionKey := r.URL.Query().Get("reconnectKey")
-		if reconnectionKey != "" {
-			roomCode = reconnectJWT.GetRoomCode(reconnectionKey)
-		}
-		if roomCode != "" {
-			room, _ = h.Server.GetRoom(roomCode)
-			if room != nil {
-				if room.IsHostConnected() {
-					room = nil
-				} else {
-					room.SendHostReconnected()
-					log.Info().Str("room-code", roomCode).Msg("Reconnected")
-				}
-			} else {
-				room = NewRoom()
-				h.Server.RegisterCode(roomCode, room)
-				log.Info().Str("room-code", roomCode).Msg("Reconnected")
-			}
-		}
-		if room == nil {
-			for {
-				roomCode = GenerateRandomCode()
-				if _, exists := h.Server.GetRoom(roomCode); !exists {
-					break
-				}
-			}
-			log.Info().Str("room-code", roomCode).Msg("Created room")
-			room = NewRoom()
-			h.Server.RegisterCode(roomCode, room)
-		}
-
 		conn, _, _, err := ws.UpgradeHTTP(r, w)
 		if err != nil {
-			log.Error().Str("msg", "Error while upgrading HTTP").Err(err).Msg("")
+			LogErrorWhileUpgradingHTTP(err)
 			return
 		}
+		defer conn.Close()
+
+		roomCode, room, err := reconnect.Try(reconnectionKey)
+		if err != nil {
+			roomCode, room = h.Server.CreateRoom()
+			LogCreatedRoom(roomCode)
+		} else {
+			LogReconnectedToRoom(roomCode)
+		}
+
+		logger := GetRoomIPLogger(r.RemoteAddr, roomCode)
+		encoded := MustMarshalJSON(map[string]string{"type": "code", "code": roomCode})
+		err = wsutil.WriteServerText(conn, encoded)
+		if err != nil {
+			h.Server.RemoveCode(roomCode)
+			return
+		}
+
+		closed := make(chan bool)
+		ticker := time.NewTicker(reconnectionTokenSendFreq)
+
 		go func() {
-			logger := GetLogger(r.RemoteAddr, roomCode)
-			encoded, _ := json.Marshal(map[string]string{"type": "code", "code": roomCode})
-			defer conn.Close()
-			err = wsutil.WriteServerText(conn, encoded)
-			if err != nil {
-				logger.Info().Msg("Removing room")
-				h.Server.RemoveCode(roomCode)
-				return
-			}
-
-			closed := make(chan bool)
-			ticker := time.NewTicker(time.Minute)
-
-			go func() {
-				sendReconnectionKey := func() {
-					token, err := reconnectJWT.Generate(roomCode)
-					if err != nil {
-						logger.Err(err).Send()
-						return
-					}
-					encoded, _ = json.Marshal(map[string]string{"type": "reconnectKey", "key": token})
-					wsutil.WriteServerText(conn, encoded)
-				}
-				sendReconnectionKey()
-				for {
-					select {
-					case <-ticker.C:
-						sendReconnectionKey()
-					case <-closed:
-						return
-					}
-				}
-			}()
-
-			for {
-				msg, err := wsutil.ReadClientText(conn)
+			sendReconnectionKey := func() {
+				token, err := reconnect.GenerateReconnectionToken(roomCode)
 				if err != nil {
-					logger.Info().Msg("Disconnected")
-					ticker.Stop()
-					closed <- true
-					reconnectionTimer := time.NewTimer(reconnectionTime)
-					room.UpdateReconnectChannel(make(chan bool))
-					disconnectMsg, _ := json.Marshal(map[string]string{"type": "hostDisconnected"})
-					room.Broadcast(disconnectMsg)
-					select {
-					case <-room.reconnected:
-						reconnectionTimer.Stop()
-						room.UpdateReconnectChannel(nil)
-						reconnectedMsg, _ := json.Marshal(map[string]string{"type": "hostReconnected"})
-						room.Broadcast(reconnectedMsg)
-					case <-reconnectionTimer.C:
-						h.Server.RemoveCode(roomCode)
-						room.CloseReceivers()
-						logger.Info().Msg("Removing room")
-					}
-					break
-				}
-				message := UnmarshalJSON[struct {
-					Type string `json:"type"`
-				}](msg)
-				switch message.Type {
-				case "sync":
-					parsedMessage := UnmarshalJSON[struct {
-						Path     string  `json:"path"`
-						Time     float64 `json:"time"`
-						Rate     float32 `json:"rate"`
-						IsPaused bool    `json:"isPaused"`
-					}](msg)
-					room.UpdateVideoState(func(v *VideoState) {
-						v.UpdatePath(parsedMessage.Path)
-						v.UpdateIsPaused(parsedMessage.IsPaused)
-						v.UpdateRate(parsedMessage.Rate)
-						v.UpdateTime(parsedMessage.Time)
-					})
-				case "startPlaying":
-					parsedMessage := UnmarshalJSON[struct {
-						Time float64 `json:"time"`
-					}](msg)
-					room.UpdateVideoState(func(v *VideoState) {
-						v.UpdateIsPaused(false)
-						v.UpdateTime(parsedMessage.Time)
-					})
-				case "pause":
-					parsedMessage := UnmarshalJSON[struct {
-						Time float64 `json:"time"`
-					}](msg)
-					room.UpdateVideoState(func(v *VideoState) {
-						v.UpdateIsPaused(true)
-						v.UpdateTime(parsedMessage.Time)
-					})
-				case "pathChange":
-					parsedMessage := UnmarshalJSON[struct {
-						Path string `json:"path"`
-					}](msg)
-					room.UpdateVideoState(func(v *VideoState) {
-						room.videoState.UpdatePath(parsedMessage.Path)
-					})
-				case "rateChange":
-					parsedMessage := UnmarshalJSON[struct {
-						Rate float32 `json:"rate"`
-					}](msg)
-					room.UpdateVideoState(func(v *VideoState) {
-						v.UpdateRate(parsedMessage.Rate)
-					})
-				case "removeRoom":
-					ticker.Stop()
-					closed <- true
-					h.Server.RemoveCode(roomCode)
-					room.CloseReceivers()
-					logger.Info().Msg("Removing room")
 					return
 				}
-				room.Broadcast(msg)
+				encoded := MustMarshalJSON(map[string]string{"type": "reconnectKey", "key": token})
+				wsutil.WriteServerText(conn, encoded)
+			}
+			sendReconnectionKey()
+			for {
+				select {
+				case <-ticker.C:
+					sendReconnectionKey()
+				case <-closed:
+					return
+				}
 			}
 		}()
+
+		for {
+			msg, err := wsutil.ReadClientText(conn)
+			if err != nil {
+				logger.HostDisconnected()
+				ticker.Stop()
+				closed <- true
+				reconnectionTimer := time.NewTimer(reconnectionTime)
+				room.UpdateReconnectChannel(make(chan bool))
+				disconnectMsg, _ := json.Marshal(map[string]string{"type": "hostDisconnected"})
+				room.Broadcast(disconnectMsg)
+				select {
+				case <-room.reconnected:
+					reconnectionTimer.Stop()
+					room.UpdateReconnectChannel(nil)
+					reconnectedMsg, _ := json.Marshal(map[string]string{"type": "hostReconnected"})
+					room.Broadcast(reconnectedMsg)
+				case <-reconnectionTimer.C:
+					h.Server.RemoveCode(roomCode)
+					room.CloseReceivers()
+					logger.RemovingRoom()
+				}
+				break
+			}
+			message := UnmarshalJSON[struct {
+				Type string `json:"type"`
+			}](msg)
+			switch message.Type {
+			case "sync":
+				parsedMessage := UnmarshalJSON[struct {
+					Path     string  `json:"path"`
+					Time     float64 `json:"time"`
+					Rate     float32 `json:"rate"`
+					IsPaused bool    `json:"isPaused"`
+				}](msg)
+				room.UpdateVideoState(func(v *VideoState) {
+					v.UpdatePath(parsedMessage.Path)
+					v.UpdateIsPaused(parsedMessage.IsPaused)
+					v.UpdateRate(parsedMessage.Rate)
+					v.UpdateTime(parsedMessage.Time)
+				})
+			case "startPlaying":
+				parsedMessage := UnmarshalJSON[struct {
+					Time float64 `json:"time"`
+				}](msg)
+				room.UpdateVideoState(func(v *VideoState) {
+					v.UpdateIsPaused(false)
+					v.UpdateTime(parsedMessage.Time)
+				})
+			case "pause":
+				parsedMessage := UnmarshalJSON[struct {
+					Time float64 `json:"time"`
+				}](msg)
+				room.UpdateVideoState(func(v *VideoState) {
+					v.UpdateIsPaused(true)
+					v.UpdateTime(parsedMessage.Time)
+				})
+			case "pathChange":
+				parsedMessage := UnmarshalJSON[struct {
+					Path string `json:"path"`
+				}](msg)
+				room.UpdateVideoState(func(v *VideoState) {
+					room.videoState.UpdatePath(parsedMessage.Path)
+				})
+			case "rateChange":
+				parsedMessage := UnmarshalJSON[struct {
+					Rate float32 `json:"rate"`
+				}](msg)
+				room.UpdateVideoState(func(v *VideoState) {
+					v.UpdateRate(parsedMessage.Rate)
+				})
+			case "removeRoom":
+				ticker.Stop()
+				closed <- true
+				h.Server.RemoveCode(roomCode)
+				room.CloseReceivers()
+				logger.RemovingRoom()
+				return
+			}
+			room.Broadcast(msg)
+		}
 	}
 }
 
@@ -233,12 +216,12 @@ func (h HTTPHandler) getRoomEventStream() http.HandlerFunc {
 		}{Type: "sync", VideoState: videoState})
 		fmt.Fprintf(w, "data: %v\n\n", string(initialData))
 		if !room.IsHostConnected() {
-			disconnectMsg, _ := json.Marshal(map[string]string{"type": "hostDisconnected"})
+			disconnectMsg := MustMarshalJSON(map[string]string{"type": "hostDisconnected"})
 			fmt.Fprintf(w, "data: %v\n\n", string(disconnectMsg))
 		}
 		flusher.Flush()
-		logger := GetLogger(r.RemoteAddr, code)
-		logger.Info().Msg("Joined room")
+		logger := GetRoomIPLogger(r.RemoteAddr, code)
+		logger.JoinedRoom()
 		sendChannel := make(chan []byte)
 		room.Join(sendChannel)
 	messageLoop:
@@ -250,14 +233,14 @@ func (h HTTPHandler) getRoomEventStream() http.HandlerFunc {
 					msg, _ = json.Marshal(map[string]string{"type": "close"})
 					fmt.Fprintf(w, "data: %v\n\n", string(msg))
 					flusher.Flush()
-					logger.Info().Msg("Left room")
+					logger.LeftRoom()
 					break messageLoop
 				}
 				fmt.Fprintf(w, "data: %v\n\n", string(msg))
 				flusher.Flush()
 			case <-r.Context().Done():
 				room.Leave(sendChannel)
-				logger.Info().Msg("Left room")
+				logger.LeftRoom()
 				break messageLoop
 			}
 		}
