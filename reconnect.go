@@ -20,9 +20,10 @@ func NewReconnect(jwtSecret string, server *Server) *Reconnect {
 	return &Reconnect{jwtSecret, server}
 }
 
-func (r Reconnect) GenerateReconnectionToken(roomCode string) (string, error) {
+func (r Reconnect) GenerateReconnectionToken(roomCode string) string {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{"roomCode": roomCode, "exp": jwt.NewNumericDate(time.Now().Add(reconnectionTime))})
-	return token.SignedString([]byte(r.jwtSecret))
+	key, _ := token.SignedString([]byte(r.jwtSecret))
+	return key
 }
 
 func (r Reconnect) getRoomCode(tokenString string) string {

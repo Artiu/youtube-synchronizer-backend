@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"slices"
 	"sync"
 )
@@ -34,10 +35,34 @@ func (r *Room) GetVideoPath() string {
 	return r.videoState.Path
 }
 
-func (r *Room) UpdateReconnectChannel(newReconnectChannel chan bool) {
+func (r *Room) updateReconnectChannel(newReconnectChannel chan bool) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	r.reconnected = newReconnectChannel
+}
+
+func (r *Room) HostDisconnected() {
+	type HostDisconnectedMsg struct {
+		Type string `json:"type"`
+	}
+	r.updateReconnectChannel(make(chan bool))
+	disconnectMsg, _ := json.Marshal(HostDisconnectedMsg{"hostDisconnected"})
+	r.broadcast(disconnectMsg)
+}
+
+func (r *Room) HostReconnected() {
+	type HostReconnectedMsg struct {
+		Type string `json:"type"`
+	}
+	r.updateReconnectChannel(nil)
+	reconnectedMsg, _ := json.Marshal(HostReconnectedMsg{"hostReconnected"})
+	r.broadcast(reconnectedMsg)
+}
+
+// Pass only message which are one of structs of Message interface
+func (r *Room) HostMessage(msg any) {
+	encoded, _ := json.Marshal(msg)
+	r.broadcast(encoded)
 }
 
 func (r *Room) UpdateVideoState(updateFunc func(v *VideoState)) {
@@ -69,7 +94,7 @@ func (r *Room) Leave(channel chan []byte) {
 	}
 }
 
-func (r *Room) Broadcast(message []byte) {
+func (r *Room) broadcast(message []byte) {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
 	for _, receiver := range r.receivers {
