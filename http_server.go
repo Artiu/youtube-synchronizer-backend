@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -178,17 +177,12 @@ func (h HTTPHandler) getRoomEventStream() http.HandlerFunc {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		receiverSSE := NewReceiverSSE(w, flusher)
 		videoState := room.GetPredictedVideoState()
-		initialData, _ := json.Marshal(struct {
-			Type string `json:"type"`
-			VideoState
-		}{Type: "sync", VideoState: videoState})
-		fmt.Fprintf(w, "data: %v\n\n", string(initialData))
+		receiverSSE.SendSyncMessage(videoState)
 		if !room.IsHostConnected() {
-			disconnectMsg, _ := json.Marshal(map[string]string{"type": "hostDisconnected"})
-			fmt.Fprintf(w, "data: %v\n\n", string(disconnectMsg))
+			receiverSSE.SendHostDisconnectedMessage()
 		}
-		flusher.Flush()
 		logger := GetRoomIPLogger(r.RemoteAddr, code)
 		logger.JoinedRoom()
 		sendChannel := make(chan []byte)
@@ -199,14 +193,11 @@ func (h HTTPHandler) getRoomEventStream() http.HandlerFunc {
 			case msg, more := <-sendChannel:
 				if !more {
 					room.Leave(sendChannel)
-					msg, _ = json.Marshal(map[string]string{"type": "close"})
-					fmt.Fprintf(w, "data: %v\n\n", string(msg))
-					flusher.Flush()
+					receiverSSE.SendRoomClosedMessage()
 					logger.LeftRoom()
 					break messageLoop
 				}
-				fmt.Fprintf(w, "data: %v\n\n", string(msg))
-				flusher.Flush()
+				receiverSSE.SendByteSlice(msg)
 			case <-r.Context().Done():
 				room.Leave(sendChannel)
 				logger.LeftRoom()
