@@ -104,7 +104,7 @@ func (h HTTPHandler) websocket(reconnect *Reconnect) http.HandlerFunc {
 					room.HostReconnected()
 				case <-reconnectionTimer.C:
 					h.Server.RemoveCode(roomCode)
-					room.CloseReceivers()
+					room.Close()
 					logger.RemovingRoom()
 				}
 				break
@@ -139,7 +139,7 @@ func (h HTTPHandler) websocket(reconnect *Reconnect) http.HandlerFunc {
 				reconnectionKeyTicker.Stop()
 				closed <- true
 				h.Server.RemoveCode(roomCode)
-				room.CloseReceivers()
+				room.Close()
 				logger.RemovingRoom()
 				return
 			}
@@ -192,7 +192,6 @@ func (h HTTPHandler) getRoomEventStream() http.HandlerFunc {
 			select {
 			case msg, more := <-sendChannel:
 				if !more {
-					room.Leave(sendChannel)
 					receiverSSE.SendRoomClosedMessage()
 					logger.LeftRoom()
 					break messageLoop

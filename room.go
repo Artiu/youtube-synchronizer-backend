@@ -102,7 +102,7 @@ func (r *Room) broadcast(message []byte) {
 	}
 }
 
-func (r *Room) CloseReceivers() {
+func (r *Room) Close() {
 	r.lock.RLock()
 	defer r.lock.RUnlock()
 	for _, receiver := range r.receivers {

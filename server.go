@@ -13,7 +13,7 @@ func NewServer() *Server {
 	return &Server{codes: make(map[string]*Room)}
 }
 
-func (s *Server) RegisterCode(code string, room *Room) {
+func (s *Server) RegisterRoom(code string, room *Room) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	s.codes[code] = room
@@ -41,6 +41,6 @@ func (s *Server) CreateRoom() (string, *Room) {
 		}
 	}
 	room := NewRoom()
-	s.RegisterCode(code, room)
+	s.RegisterRoom(code, room)
 	return code, room
 }

@@ -50,7 +50,7 @@ func (r Reconnect) Try(reconnectionKey string) (string, *Room, error) {
 	room, _ := r.server.GetRoom(roomCode)
 	if room == nil {
 		room = NewRoom()
-		r.server.RegisterCode(roomCode, room)
+		r.server.RegisterRoom(roomCode, room)
 		return roomCode, room, nil
 	}
 	if room.IsHostConnected() {
