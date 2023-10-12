@@ -12,6 +12,11 @@ type HostWebsocket struct {
 	conn net.Conn
 }
 
+type CodeMessage struct {
+	Type string `json:"type"`
+	Code string `json:"code"`
+}
+
 func NewHostWebsocket(conn net.Conn) *HostWebsocket {
 	return &HostWebsocket{conn}
 }
@@ -21,10 +26,6 @@ func (h HostWebsocket) sendMessage(message []byte) error {
 }
 
 func (h HostWebsocket) SendRoomCode(roomCode string) error {
-	type CodeMessage struct {
-		Type string `json:"type"`
-		Code string `json:"code"`
-	}
 	encoded, _ := json.Marshal(CodeMessage{"code", roomCode})
 	return h.sendMessage(encoded)
 }
@@ -81,28 +82,15 @@ func (h HostWebsocket) ReadMessage() (any, error) {
 	var parsedMessage any
 	switch message.Type {
 	case "sync":
-		parsedMessage = UnmarshalJSON[struct {
-			Path     string  `json:"path"`
-			Time     float64 `json:"time"`
-			Rate     float32 `json:"rate"`
-			IsPaused bool    `json:"isPaused"`
-		}](msg)
+		parsedMessage = UnmarshalJSON[SyncMessage](msg)
 	case "startPlaying":
-		parsedMessage = UnmarshalJSON[struct {
-			Time float64 `json:"time"`
-		}](msg)
+		parsedMessage = UnmarshalJSON[StartPlayingMessage](msg)
 	case "pause":
-		parsedMessage = UnmarshalJSON[struct {
-			Time float64 `json:"time"`
-		}](msg)
+		parsedMessage = UnmarshalJSON[PauseMessage](msg)
 	case "pathChange":
-		parsedMessage = UnmarshalJSON[struct {
-			Path string `json:"path"`
-		}](msg)
+		parsedMessage = UnmarshalJSON[PathChangeMessage](msg)
 	case "rateChange":
-		parsedMessage = UnmarshalJSON[struct {
-			Rate float32 `json:"rate"`
-		}](msg)
+		parsedMessage = UnmarshalJSON[RateChangeMessage](msg)
 	case "removeRoom":
 		parsedMessage = RemoveRoomMessage{}
 	default:
