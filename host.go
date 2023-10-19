@@ -17,26 +17,32 @@ type CodeMessage struct {
 	Code string `json:"code"`
 }
 
+type ReconnectKeyMessage struct {
+	Type         string `json:"type"`
+	ReconnectKey string `json:"reconnectKey"`
+}
+
+func UnmarshalJSON[T any](data []byte) T {
+	var parsed T
+	json.Unmarshal(data, &parsed)
+	return parsed
+}
+
 func NewHostWebsocket(conn net.Conn) *HostWebsocket {
 	return &HostWebsocket{conn}
 }
 
-func (h HostWebsocket) sendMessage(message []byte) error {
-	return wsutil.WriteServerText(h.conn, message)
+func (h HostWebsocket) sendMessage(message any) error {
+	encoded, _ := json.Marshal(message)
+	return wsutil.WriteServerText(h.conn, encoded)
 }
 
 func (h HostWebsocket) SendRoomCode(roomCode string) error {
-	encoded, _ := json.Marshal(CodeMessage{"code", roomCode})
-	return h.sendMessage(encoded)
+	return h.sendMessage(CodeMessage{Type: "code", Code: roomCode})
 }
 
 func (h HostWebsocket) SendReconnectKey(reconnectKey string) error {
-	type ReconnectKeyMessage struct {
-		Type         string `json:"type"`
-		ReconnectKey string `json:"reconnectKey"`
-	}
-	encoded, _ := json.Marshal(ReconnectKeyMessage{"reconnectKey", reconnectKey})
-	return h.sendMessage(encoded)
+	return h.sendMessage(ReconnectKeyMessage{Type: "reconnectKey", ReconnectKey: reconnectKey})
 }
 
 type SyncMessage struct {

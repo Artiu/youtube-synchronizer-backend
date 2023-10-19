@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -12,12 +11,6 @@ import (
 	"github.com/go-chi/httprate"
 	"github.com/gobwas/ws"
 )
-
-func UnmarshalJSON[T any](data []byte) T {
-	var parsed T
-	json.Unmarshal(data, &parsed)
-	return parsed
-}
 
 type HTTPHandler struct {
 	Server *Server
