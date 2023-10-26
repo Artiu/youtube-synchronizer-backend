@@ -20,24 +20,26 @@ func (r ReceiverSSE) SendByteSlice(msg []byte) {
 	r.f.Flush()
 }
 
+func (r ReceiverSSE) sendJSON(msg any) {
+	data, _ := json.Marshal(msg)
+	r.SendByteSlice(data)
+}
+
 func (r ReceiverSSE) SendSyncMessage(videoState VideoState) {
-	data, _ := json.Marshal(struct {
+	r.sendJSON(struct {
 		Type string `json:"type"`
 		VideoState
 	}{Type: "sync", VideoState: videoState})
-	r.SendByteSlice(data)
 }
 
 func (r ReceiverSSE) SendHostDisconnectedMessage() {
-	data, _ := json.Marshal(struct {
+	r.sendJSON(struct {
 		Type string `json:"type"`
 	}{Type: "hostDisconnected"})
-	r.SendByteSlice(data)
 }
 
 func (r ReceiverSSE) SendRoomClosedMessage() {
-	data, _ := json.Marshal(struct {
+	r.sendJSON(struct {
 		Type string `type:"type"`
 	}{Type: "close"})
-	r.SendByteSlice(data)
 }
